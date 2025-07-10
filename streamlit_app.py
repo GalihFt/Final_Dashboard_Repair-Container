@@ -303,9 +303,19 @@ with tab_manual:
                     if not prediction_result.empty:
                         result_row = prediction_result.iloc[0]
                         st.subheader(f"Hasil Estimasi untuk DEPO {depo_option}")
-                        display_data = [{"Vendor": vendor, "Prediksi Biaya": result_row.get(f"PREDIKSI_{vendor}", np.nan), "Estimasi MHR": result_row.get(f"MHR_{vendor}", np.nan), "Rasio Biaya/MHR": result_row.get(f"PREDIKSI/MHR_{vendor}", np.nan)} for vendor in pipeline.depo_config.get(depo_option, {}).get("vendors", [])]
                         
-                        price_df = pd.DataFrame(display_data).dropna(subset=['Prediksi Biaya', 'Estimasi MHR'], how='all').sort_values(by="Prediksi Biaya", na_position='last')
+                        # Mengubah nama kolom dinamis untuk tampilan
+                        display_data_list = []
+                        for vendor in pipeline.depo_config.get(depo_option, {}).get("vendors", []):
+                            display_data_list.append({
+                                "Vendor": vendor, 
+                                "Prediksi Biaya": result_row.get(f"PREDIKSI_{vendor}", np.nan), 
+                                "Estimasi MHR": result_row.get(f"MHR_{vendor}", np.nan), 
+                                "Rasio Biaya/MHR": result_row.get(f"PREDIKSI/MHR_{vendor}", np.nan)
+                            })
+                        
+                        price_df = pd.DataFrame(display_data_list).dropna(subset=['Prediksi Biaya', 'Estimasi MHR'], how='all').sort_values(by="Prediksi Biaya", na_position='last')
+                        
                         if not price_df.empty:
                             st.dataframe(price_df.style.format({'Prediksi Biaya': 'Rp {:,.0f}', 'Estimasi MHR': '{:,.2f}', 'Rasio Biaya/MHR': 'Rp {:,.0f}/jam'}, na_rep='-'), use_container_width=True)
                         else:
@@ -506,7 +516,7 @@ with tab_bulk:
                 def get_final_mhr(row):
                     if pd.isna(row['ALOKASI']) or 'Tidak Terhandle' in row['ALOKASI']: return np.nan
                     if 'SPIL' in row['ALOKASI']: vendor = 'SPIL'
-                    else: vendor = row['ALOKASI'].replace('', '')
+                    else: vendor = row['ALOKASI']
                     return row.get(f"MHR_{vendor}", np.nan)
                 final_results['MHR'] = final_results.apply(get_final_mhr, axis=1)
 
@@ -517,10 +527,12 @@ with tab_bulk:
                     Jumlah_Kontainer=('NO_EOR', 'nunique'),
                     Total_Prediksi_Biaya=('HARGA_FINAL', 'sum'),
                     Total_MHR=('MHR', 'sum')
-            ).reset_index().rename(columns={'ALOKASI': 'STATUS',
-                                            'Total_Prediksi_Biaya': 'Total Biaya',
-                                            'Jumlah_Kontainer': 'Jumlah Kontainer',
-                                            'Total_MHR': 'Total MHR'})
+                ).reset_index().rename(columns={
+                    'ALOKASI': 'STATUS',
+                    'Total_Prediksi_Biaya': 'Total Biaya',
+                    'Jumlah_Kontainer': 'Jumlah Kontainer',
+                    'Total_MHR': 'Total MHR'
+                })
                 
                 st.dataframe(vendor_stats.style.format({
                     'Total Biaya': 'Rp {:,.0f}', 
@@ -535,17 +547,20 @@ with tab_bulk:
                 display_cols_exist = [col for col in display_cols if col in final_results.columns]
                 display_df = final_results[display_cols_exist].sort_values(by='Selisih_Prediksi_Biaya', ascending=False)
                 
+                # Membuat dictionary untuk rename kolom secara dinamis
+                rename_map_detail = {
+                    'HARGA_FINAL': 'Prediksi Biaya',
+                    'PREDIKSI_SPIL': 'Prediksi Biaya SPIL',
+                    'Selisih_Prediksi_Biaya': 'Potensial Keuntungan',
+                    'CONTAINER_TYPE': 'Tipe Kontainer',
+                    'ALOKASI': 'Alokasi',
+                    'NO_EOR': 'No EOR',
+                    'Prediksi_Biaya_Lain': 'Prediksi Biaya Lain',
+                    'MHR': 'Estimasi MHR'
+                }
+
                 st.dataframe(
-                    display_df.rename(columns={
-                        'HARGA_FINAL': 'Prediksi Biaya',
-                        'PREDIKSI_SPIL': 'Prediksi Biaya SPIL',
-                        'Selisih_Prediksi_Biaya': 'Potensial Keuntungan',
-                        'CONTAINER_TYPE': 'Tipe Kontainer',
-                        'ALOKASI': 'Alokasi',
-                        'NO_EOR': 'No EOR',
-                        'Prediksi_Biaya_Lain': 'Prediksi Biaya Lain',
-                        'MHR': 'Estimasi MHR'
-                    }).style.format({
+                    display_df.rename(columns=rename_map_detail).style.format({
                         'Prediksi Biaya': 'Rp {:,.0f}',
                         'Estimasi MHR': '{:,.2f}',
                         'Potensial Keuntungan': 'Rp {:,.0f}',
@@ -556,7 +571,7 @@ with tab_bulk:
                     use_container_width=True
                 )
                 
-                csv_final = display_df.to_csv(index=False).encode('utf-8')
+                csv_final = display_df.rename(columns=rename_map_detail).to_csv(index=False).encode('utf-8')
                 st.download_button(label="Download Hasil Alokasi", data=csv_final, file_name=f"hasil_alokasi_spil_{depo_option}.csv", mime="text/csv")
                 
                 with st.expander("Lihat Tabel Alokasi Lengkap", expanded=False):
@@ -565,49 +580,66 @@ with tab_bulk:
                     def highlight_final_choice(row):
                         highlight_color = 'background-color: #fff8c4;'
                         styles = [''] * len(row)
-                        alokasi = row.get('ALOKASI')
-                        if pd.isna(alokasi) or 'Tidak Terhandle' in alokasi:
+                        alokasi_vendor = row.get('Alokasi') # Menggunakan nama kolom yang sudah di-rename
+                        if pd.isna(alokasi_vendor) or 'Tidak Terhandle' in alokasi_vendor:
                             return styles
                         
-                        vendor = alokasi.replace('', '').replace('Waiting List ', '').strip()
-                        pred_col = f'PREDIKSI_{vendor}'
-                        mhr_col = f'MHR_{vendor}'
+                        vendor = alokasi_vendor.replace('Waiting List ', '').strip()
+                        pred_col_name = f'Prediksi {vendor}'
+                        mhr_col_name = f'MHR {vendor}'
                         
-                        try:
-                            if pred_col in row.index:
-                                pred_idx = row.index.get_loc(pred_col)
-                                styles[pred_idx] = highlight_color
-                            if mhr_col in row.index:
-                                mhr_idx = row.index.get_loc(mhr_col)
-                                styles[mhr_idx] = highlight_color
-                        except KeyError:
-                            pass
+                        if pred_col_name in row.index:
+                            pred_idx = row.index.get_loc(pred_col_name)
+                            styles[pred_idx] = highlight_color
+                        if mhr_col_name in row.index:
+                            mhr_idx = row.index.get_loc(mhr_col_name)
+                            styles[mhr_idx] = highlight_color
                         return styles
 
                     base_info_cols = ['NO_EOR', 'CONTAINER_TYPE', 'ALOKASI', 'HARGA_FINAL', 'MHR', 'Selisih_Prediksi_Biaya']
-                    pred_cols_all = sorted([col for col in final_results.columns if col.startswith("PREDIKSI ") and not col.startswith("PREDIKSI/MHR_")])
-                    mhr_cols_all = sorted([col for col in final_results.columns if col.startswith("MHR ") and col != 'MHR'])
+                    pred_cols_all = sorted([col for col in final_results.columns if col.startswith("PREDIKSI_") and not col.startswith("PREDIKSI/MHR_")])
+                    mhr_cols_all = sorted([col for col in final_results.columns if col.startswith("MHR_") and col != 'MHR'])
                     
                     comprehensive_cols = base_info_cols + pred_cols_all + mhr_cols_all
                     comprehensive_cols_exist = [col for col in comprehensive_cols if col in final_results.columns]
                     
-                    detail_df = final_results[comprehensive_cols_exist].sort_values(by='Selisih_Prediksi_Biaya', ascending=False).copy()
+                    detail_df_comprehensive = final_results[comprehensive_cols_exist].sort_values(by='Selisih_Prediksi_Biaya', ascending=False).copy()
                     
+                    # Membuat dictionary dinamis untuk mengganti nama semua kolom vendor
+                    rename_map_comprehensive = {
+                        'HARGA_FINAL': 'Prediksi Biaya Final',
+                        'NO_EOR': 'No EOR',
+                        'CONTAINER_TYPE': 'Tipe Kontainer',
+                        'ALOKASI': 'Alokasi',
+                        'Selisih_Prediksi_Biaya': 'Potensial Keuntungan',
+                        'MHR': 'Estimasi MHR'
+                    }
                     format_dict_full = {
                         'Prediksi Biaya Final': 'Rp {:,.0f}',
                         'Estimasi MHR': '{:,.2f}',
                         'Potensial Keuntungan': 'Rp {:,.0f}'
                     }
-                    for col in pred_cols_all: format_dict_full[col] = 'Rp {:,.0f}'
-                    for col in mhr_cols_all: format_dict_full[col] = '{:,.2f}'
+
+                    for col in detail_df_comprehensive.columns:
+                        if col.startswith('PREDIKSI_'):
+                            new_name = col.replace('PREDIKSI_', 'Prediksi ')
+                            rename_map_comprehensive[col] = new_name
+                            format_dict_full[new_name] = 'Rp {:,.0f}'
+                        elif col.startswith('MHR_'):
+                            new_name = col.replace('MHR_', 'MHR ')
+                            rename_map_comprehensive[col] = new_name
+                            format_dict_full[new_name] = '{:,.2f}'
                     
-                    st.dataframe(detail_df.rename(columns={'HARGA_FINAL': 'Prediksi Biaya Final',
-                                                           'NO_EOR': 'No EOR',
-                                                           'CONTAINER_TYPE':'Tipe Kontainer',
-                                                           'Selisih_Prediksi_Biaya': 'Potensial Keuntungan',
-                                                           'MHR':'Estimasi MHR'}).style.apply(highlight_final_choice, axis=1).format(format_dict_full, na_rep='-'), height=600, use_container_width=True)
+                    # Terapkan rename dan format
+                    display_df_renamed = detail_df_comprehensive.rename(columns=rename_map_comprehensive)
                     
-                    csv_pred_detail = detail_df.to_csv(index=False).encode('utf-8')
+                    st.dataframe(
+                        display_df_renamed.style.apply(highlight_final_choice, axis=1).format(format_dict_full, na_rep='-'), 
+                        height=600, 
+                        use_container_width=True
+                    )
+                    
+                    csv_pred_detail = display_df_renamed.to_csv(index=False).encode('utf-8')
                     st.download_button(
                         label="Download Tabel Lengkap",
                         data=csv_pred_detail,
