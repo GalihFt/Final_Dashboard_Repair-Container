@@ -20,13 +20,13 @@ class ContainerRepairPipeline:
         self.depo_config = {
             "SBY": {
                 "vendors": ['MTCP', 'SPIL'],
-                "model_path": "SBY_model_23_Juni.cbm",
+                "model_path": "SBY_SPIL_Final.cbm",
                 "model_mhr_path": "SBY_model_MHR.cbm",
                 "category_map_path": 'sby_category_threshold_maps.pkl'
             },
             "JKT": {
                 "vendors": ['MDS', 'SPIL', 'MDSBC', 'MACBC', 'PTMAC', 'MCPNL', 'MCPCONCH'],
-                "model_path": "JKT_model_23_Juni.cbm",
+                "model_path": "JKT_SPIL_Final.cbm",
                 "model_mhr_path": "JKT_model_MHR.cbm",
                 "category_map_path": 'jkt_category_threshold_maps.pkl'
             }
@@ -58,7 +58,6 @@ class ContainerRepairPipeline:
                 print(f"Warning: Gagal memuat map untuk DEPO {depo}. Error: {e}")
 
     def run_pipeline(self, input_data: pd.DataFrame) -> pd.DataFrame:
-        self.load_models()
         df_processed = self.preprocess_data(input_data)
         df_cat = self.process_categories(df_processed)
         df_expanded = self.expand_quantity(df_cat)
@@ -222,30 +221,35 @@ class ContainerRepairPipeline:
 # ==============================================================================
 @st.cache_resource
 def get_pipeline():
+    """
+    Loads the pipeline and its models once and caches it.
+    This prevents reloading on every script rerun.
+    """
     pipeline = ContainerRepairPipeline()
-    pipeline.load_models()
+    pipeline.load_models()  # Models are loaded here, just once.
     return pipeline
 
 st.set_page_config(page_title="Container Repair Prediction", layout="wide")
-st.title("📦 Alat Bantu Keputusan Perbaikan Kontainer")
+st.title("Dashboard Alokasi Perbaikan Kontainer")
 
+# Get the cached pipeline instance.
 pipeline = get_pipeline()
 
 with st.sidebar:
     st.header("⚙️ Parameter Global")
     depo_option = st.selectbox("Pilih DEPO", ["JKT", "SBY"], key="global_depo")
     
-tab_manual, tab_bulk = st.tabs(["Cek Harga Manual", "Alokasi Optimal (Upload CSV)"])
+tab_manual, tab_bulk = st.tabs(["Input Manual", "Input CSV"])
 
 # ==============================================================================
-# TAB 1: CEK HARGA MANUAL
+# TAB 1: CEK HARGA MANUAL (EFFICIENT VERSION)
 # ==============================================================================
 with tab_manual:
-    st.header("Cek Estimasi Harga & MHR per Kerusakan (Manual)")
-    st.info("Masukkan detail perbaikan untuk satu kontainer untuk melihat perbandingan harga, MHR, dan rasio antar vendor.")
+    st.header("Estimasi Biaya Perbaikan Berdasarkan Jenis Kerusakan")
+    st.info("Masukkan detail perbaikan untuk satu kontainer untuk melihat perbandingan prediksi biaya, MHR, dan rasio antar vendor.")
 
     st.subheader("📝 Masukkan Detail Kerusakan")
-    num_entries = st.number_input("Jumlah Item Kerusakan", min_value=1, max_value=20, value=3, help="Tentukan berapa banyak baris kerusakan yang akan Anda masukkan.")
+    num_entries = st.number_input("Jumlah Item Kerusakan", min_value=1, max_value=30, value=3, help="Tentukan berapa banyak baris kerusakan yang akan Anda masukkan.")
 
     @st.cache_data
     def load_unique_values():
@@ -263,8 +267,8 @@ with tab_manual:
     COMPONENT_OPTIONS = ["- Pilih Komponen -"] + sorted(unique_list_df["COMPONENT"].dropna().unique().tolist())
 
     with st.form("manual_entry_form"):
-        container_grade = st.selectbox("Container Grade", ['A', 'B', 'C'], help="Grade kontainer.", key="manual_grade")
-        container_size = st.selectbox("Container Size", ['20', '40'], help="Ukuran kontainer (20ft atau 40ft).", key="manual_size")
+        container_grade = st.selectbox("Kontainer Grade", ['A', 'B', 'C'], help="Grade kontainer.", key="manual_grade")
+        container_size = st.selectbox("Ukuran Kontainer", ['20', '40'], help="Ukuran kontainer (20ft atau 40ft).", key="manual_size")
         damage_data = {'damage': [], 'repair_action': [], 'location': [], 'component': [], 'qty': []}
         
         cols_header = st.columns(5)
@@ -282,14 +286,14 @@ with tab_manual:
             damage_data['component'].append(cols[3].selectbox(f"Component_{i}", COMPONENT_OPTIONS, key=f"component_{i}", label_visibility="collapsed"))
             damage_data['qty'].append(cols[4].number_input(f"Qty_{i}", min_value=1, value=1, key=f"qty_{i}", label_visibility="collapsed"))
 
-        submitted = st.form_submit_button("🚀 Cek Estimasi")
+        submitted = st.form_submit_button("Cek Estimasi")
 
     if submitted:
         fields_to_validate = [damage_data['damage'], damage_data['repair_action'], damage_data['location'], damage_data['component']]
         if any(opt.startswith("- Pilih") for opt in chain.from_iterable(fields_to_validate)):
             st.warning("Mohon pastikan semua detail kerusakan (Tipe, Tindakan, Lokasi, Komponen) telah dipilih dari dropdown.")
         else:
-            with st.spinner("Menjalankan prediksi untuk input manual..."):
+            with st.spinner("Loading..."):
                 manual_input_rows = [{"NO_EOR": "MANUAL_CHECK", "CONTAINER_SIZE": container_size, "CONTAINER_GRADE": container_grade, "DAMAGE": damage_data['damage'][i], "REPAIRACTION": damage_data['repair_action'][i], "COMPONENT": damage_data['component'][i], "LOCATION": damage_data['location'][i], "QTY": damage_data['qty'][i], "DEPO": depo_option} for i in range(num_entries)]
                 manual_df = pd.DataFrame(manual_input_rows)
                 
@@ -299,11 +303,11 @@ with tab_manual:
                     if not prediction_result.empty:
                         result_row = prediction_result.iloc[0]
                         st.subheader(f"Hasil Estimasi untuk DEPO {depo_option}")
-                        display_data = [{"Vendor": vendor, "Estimasi Harga": result_row.get(f"PREDIKSI_{vendor}", np.nan), "Estimasi MHR": result_row.get(f"MHR_{vendor}", np.nan), "Harga/MHR": result_row.get(f"PREDIKSI/MHR_{vendor}", np.nan)} for vendor in pipeline.depo_config.get(depo_option, {}).get("vendors", [])]
+                        display_data = [{"Vendor": vendor, "Prediksi Biaya": result_row.get(f"PREDIKSI_{vendor}", np.nan), "Estimasi MHR": result_row.get(f"MHR_{vendor}", np.nan), "Rasio Biaya/MHR": result_row.get(f"PREDIKSI/MHR_{vendor}", np.nan)} for vendor in pipeline.depo_config.get(depo_option, {}).get("vendors", [])]
                         
-                        price_df = pd.DataFrame(display_data).dropna(subset=['Estimasi Harga', 'Estimasi MHR'], how='all').sort_values(by="Estimasi Harga", na_position='last')
+                        price_df = pd.DataFrame(display_data).dropna(subset=['Prediksi Biaya', 'Estimasi MHR'], how='all').sort_values(by="Prediksi Biaya", na_position='last')
                         if not price_df.empty:
-                            st.dataframe(price_df.style.format({'Estimasi Harga': 'Rp {:,.0f}', 'Estimasi MHR': '{:,.2f}', 'Harga/MHR': 'Rp {:,.0f}/jam'}, na_rep='-'), use_container_width=True)
+                            st.dataframe(price_df.style.format({'Prediksi Biaya': 'Rp {:,.0f}', 'Estimasi MHR': '{:,.2f}', 'Rasio Biaya/MHR': 'Rp {:,.0f}/jam'}, na_rep='-'), use_container_width=True)
                         else:
                             st.error("Tidak ada prediksi yang valid untuk kombinasi Grade dan DEPO yang dipilih.")
                     else:
@@ -315,41 +319,85 @@ with tab_manual:
 # TAB 2: ALOKASI OPTIMAL (BULK) - LOGIKA BARU
 # ==============================================================================
 with tab_bulk:
-    st.header("Alokasi Optimal untuk Banyak Kontainer (SPIL-Centric)")
+    st.header("Alokasi Optimal untuk Perbaikan Kontainer")
 
     with st.expander("Opsi & Upload File", expanded=True):
         uploaded_file = st.file_uploader("Upload file CSV Anda", type=["csv"], key="bulk_upload_spil")
+
+        st.markdown("##### **Kapasitas SPIL**")
         
-        st.markdown("##### **Filter Kapasitas Utama**")
+        col_toggle1, col_toggle2 = st.columns(2)
+        use_container_filter = col_toggle1.toggle("Gunakan Filter Kapasitas Kontainer", value=True, key="toggle_container")
+        use_mhr_filter = col_toggle2.toggle("Gunakan Filter Kapasitas MHR", value=True, key="toggle_mhr")
+        
         col1_spil, col2_spil = st.columns(2)
-        spil_container_capacity = col1_spil.number_input(f"Kapasitas Kontainer SPIL", min_value=0, value=100, key=f"today_container_spil")
-        spil_mhr_capacity = col2_spil.number_input(f"Kapasitas MHR SPIL", min_value=0, value=5000, key=f"today_mhr_spil", format="%d")
-        
+        spil_container_capacity = col1_spil.number_input(
+            f"Kapasitas Kontainer SPIL", 
+            min_value=0, 
+            value=100, 
+            key=f"today_container_spil",
+            disabled=not use_container_filter
+        )
+        spil_mhr_capacity = col2_spil.number_input(
+            f"Kapasitas MHR SPIL", 
+            min_value=0, 
+            value=5000, 
+            key=f"today_mhr_spil", 
+            format="%d",
+            disabled=not use_mhr_filter
+        )
+
         st.markdown("---")
-        st.markdown("##### **Filter Penanganan Sisa Pekerjaan (Opsional)**")
-        
-        use_waiting_list = st.checkbox("Buat Waiting List untuk Besok", key="use_waiting_list")
+        st.markdown("##### **Penanganan Sisa Pekerjaan (Opsional)**")
+
+        use_waiting_list = st.checkbox("Waiting List SPIL", key="use_waiting_list")
         tomorrow_capacities_input = {}
         if use_waiting_list:
             col1_wl, col2_wl = st.columns(2)
-            tomorrow_container_capacity = col1_wl.number_input("Kontainer SPIL Besok", min_value=0, value=50, key="tomorrow_container_spil")
-            tomorrow_mhr_capacity = col2_wl.number_input("MHR SPIL Besok", min_value=0, value=2500, key="tomorrow_mhr_spil", format="%d")
+            tomorrow_container_capacity = col1_wl.number_input(
+                "Kapasitas Kontainer SPIL Besok", 
+                min_value=0, 
+                value=50, 
+                key="tomorrow_container_spil",
+                disabled=not use_container_filter
+            )
+            tomorrow_mhr_capacity = col2_wl.number_input(
+                "Kapasitas MHR SPIL Besok", 
+                min_value=0, 
+                value=2500, 
+                key="tomorrow_mhr_spil", 
+                format="%d",
+                disabled=not use_mhr_filter
+            )
             tomorrow_capacities_input = {"kontainer": tomorrow_container_capacity, "mhr": tomorrow_mhr_capacity}
 
-        use_other_vendors = st.checkbox("Alokasikan ke Vendor Lain", key="use_other_vendors")
+        use_other_vendors = st.checkbox("Vendor Lain", key="use_other_vendors")
         other_vendor_capacities_input = {}
         if use_other_vendors:
             other_vendors = [v for v in pipeline.depo_config.get(depo_option, {}).get("vendors", []) if v != 'SPIL']
             for vendor in other_vendors:
                 col1_other, col2_other = st.columns(2)
-                container_capacity = col1_other.number_input(f"Kontainer {vendor}", min_value=0, value=100, key=f"other_container_{vendor}")
-                mhr_capacity = col2_other.number_input(f"MHR {vendor}", min_value=0, value=5000, key=f"other_mhr_{vendor}", format="%d")
+                container_capacity = col1_other.number_input(
+                    f"Kapasitas Kontainer {vendor}", 
+                    min_value=0, 
+                    value=100, 
+                    key=f"other_container_{vendor}",
+                    disabled=not use_container_filter
+                )
+                mhr_capacity = col2_other.number_input(
+                    f"Kapasitas MHR {vendor}", 
+                    min_value=0, 
+                    value=5000, 
+                    key=f"other_mhr_{vendor}", 
+                    format="%d",
+                    disabled=not use_mhr_filter
+                )
                 other_vendor_capacities_input[vendor] = {"kontainer": container_capacity, "mhr": mhr_capacity}
 
-        run_bulk_button = st.button("Jalankan Alokasi SPIL-Centric", type="primary", key="spil_run")
+        run_bulk_button = st.button("Cek Alokasi", type="primary", key="spil_run")
 
     @st.cache_data
-    def run_spil_centric_allocation(_pipeline, uploaded_file_content, depo_option, spil_today_cap, spil_tomorrow_cap, other_vendor_caps, use_wl, use_ov, version="3.4"):
+    def run_spil_centric_allocation(_pipeline, uploaded_file_content, depo_option, spil_today_cap, spil_tomorrow_cap, other_vendor_caps, use_wl, use_ov, use_container_filter, use_mhr_filter, version="3.4"):
         data = pd.read_csv(StringIO(uploaded_file_content))
         data["DEPO"] = depo_option
         
@@ -358,15 +406,15 @@ with tab_bulk:
             st.error("Prediksi untuk SPIL tidak tersedia. Alokasi tidak dapat dilanjutkan.")
             return pd.DataFrame()
 
-        other_vendor_preds = [c for c in raw_results.columns if c.startswith('PREDIKSI_') and 'SPIL' not in c]
-        raw_results['HARGA_TERMURAH_LAIN'] = raw_results[other_vendor_preds].min(axis=1)
-        raw_results['POTENSI_UNTUNG_SPIL'] = raw_results['HARGA_TERMURAH_LAIN'] - raw_results['PREDIKSI_SPIL']
+        other_vendor_preds = [c for c in raw_results.columns if c.startswith('PREDIKSI_') and 'SPIL' not in c and not c.startswith('PREDIKSI/MHR_')]
+        raw_results['Prediksi_Biaya_Lain'] = raw_results[other_vendor_preds].min(axis=1)
+        raw_results['Selisih_Prediksi_Biaya'] = raw_results['Prediksi_Biaya_Lain'] - raw_results['PREDIKSI_SPIL']
         
-        spil_candidates = raw_results.sort_values(by='POTENSI_UNTUNG_SPIL', ascending=False)
+        spil_candidates = raw_results.sort_values(by='Selisih_Prediksi_Biaya', ascending=False)
         allocations = {}
         
-        spil_container_cap = spil_today_cap['kontainer']
-        spil_mhr_cap = spil_today_cap['mhr']
+        spil_container_cap = spil_today_cap['kontainer'] if use_container_filter else float('inf')
+        spil_mhr_cap = spil_today_cap['mhr'] if use_mhr_filter else float('inf')
         unallocated_eors = []
         
         for idx, row in spil_candidates.iterrows():
@@ -374,35 +422,39 @@ with tab_bulk:
             mhr_needed = row.get('MHR_SPIL', 0)
             if pd.isna(mhr_needed): mhr_needed = 0
 
-            if spil_container_cap > 0 and spil_mhr_cap >= mhr_needed:
-                allocations[eor] = {'ALOKASI': 'Dikerjakan SPIL', 'HARGA_FINAL': row['PREDIKSI_SPIL']}
-                spil_container_cap -= 1
-                spil_mhr_cap -= mhr_needed
+            if (not use_container_filter or spil_container_cap > 0) and (not use_mhr_filter or spil_mhr_cap >= mhr_needed):
+                allocations[eor] = {'ALOKASI': 'SPIL', 'HARGA_FINAL': row['PREDIKSI_SPIL']}
+                if use_container_filter:
+                    spil_container_cap -= 1
+                if use_mhr_filter:
+                    spil_mhr_cap -= mhr_needed
             else:
                 unallocated_eors.append(eor)
         
         overflow_df = spil_candidates[spil_candidates['NO_EOR'].isin(unallocated_eors)].copy()
         
         if use_wl:
-            waiting_list_candidates = overflow_df.sort_values(by='POTENSI_UNTUNG_SPIL', ascending=False)
-            spil_tomorrow_container_cap = spil_tomorrow_cap.get('kontainer', 0)
-            spil_tomorrow_mhr_cap = spil_tomorrow_cap.get('mhr', 0)
+            waiting_list_candidates = overflow_df.sort_values(by='Selisih_Prediksi_Biaya', ascending=False)
+            spil_tomorrow_container_cap = spil_tomorrow_cap.get('kontainer', 0) if use_container_filter else float('inf')
+            spil_tomorrow_mhr_cap = spil_tomorrow_cap.get('mhr', 0) if use_mhr_filter else float('inf')
             remaining_after_wl = []
             
             for idx, row in waiting_list_candidates.iterrows():
                 eor = row['NO_EOR']
                 mhr_needed = row.get('MHR_SPIL', 0)
                 if pd.isna(mhr_needed): mhr_needed = 0
-                if spil_tomorrow_container_cap > 0 and spil_tomorrow_mhr_cap >= mhr_needed:
+                if (not use_container_filter or spil_tomorrow_container_cap > 0) and (not use_mhr_filter or spil_tomorrow_mhr_cap >= mhr_needed):
                     allocations[eor] = {'ALOKASI': 'Waiting List SPIL', 'HARGA_FINAL': row['PREDIKSI_SPIL']}
-                    spil_tomorrow_container_cap -= 1
-                    spil_tomorrow_mhr_cap -= mhr_needed
+                    if use_container_filter:
+                        spil_tomorrow_container_cap -= 1
+                    if use_mhr_filter:
+                        spil_tomorrow_mhr_cap -= mhr_needed
                 else:
                     remaining_after_wl.append(eor)
             overflow_df = overflow_df[overflow_df['NO_EOR'].isin(remaining_after_wl)].copy()
 
         if use_ov:
-            other_vendor_candidates = overflow_df.sort_values(by='POTENSI_UNTUNG_SPIL', ascending=True)
+            other_vendor_candidates = overflow_df.sort_values(by='Selisih_Prediksi_Biaya', ascending=True)
             for idx, row in other_vendor_candidates.iterrows():
                 eor = row['NO_EOR']
                 allocated = False
@@ -412,10 +464,15 @@ with tab_bulk:
                     mhr_needed = row.get(f'MHR_{vendor_name}', 0)
                     if pd.isna(mhr_needed): mhr_needed = 0
 
-                    if other_vendor_caps.get(vendor_name, {}).get('kontainer', 0) > 0 and other_vendor_caps.get(vendor_name, {}).get('mhr', 0) >= mhr_needed:
-                        allocations[eor] = {'ALOKASI': f'Dikerjakan {vendor_name}', 'HARGA_FINAL': vendor_price_val[1]}
-                        other_vendor_caps[vendor_name]['kontainer'] -= 1
-                        other_vendor_caps[vendor_name]['mhr'] -= mhr_needed
+                    container_cap = other_vendor_caps.get(vendor_name, {}).get('kontainer', 0) if use_container_filter else float('inf')
+                    mhr_cap = other_vendor_caps.get(vendor_name, {}).get('mhr', 0) if use_mhr_filter else float('inf')
+
+                    if (not use_container_filter or container_cap > 0) and (not use_mhr_filter or mhr_cap >= mhr_needed):
+                        allocations[eor] = {'ALOKASI': f'{vendor_name}', 'HARGA_FINAL': vendor_price_val[1]}
+                        if use_container_filter:
+                            other_vendor_caps[vendor_name]['kontainer'] -= 1
+                        if use_mhr_filter:
+                            other_vendor_caps[vendor_name]['mhr'] -= mhr_needed
                         allocated = True
                         break
                 if not allocated:
@@ -434,111 +491,117 @@ with tab_bulk:
             
             spil_today_caps = {"kontainer": spil_container_capacity, "mhr": spil_mhr_capacity}
 
-            with st.spinner(f'Menjalankan alokasi SPIL-Centric...'):
+            with st.spinner(f'Loading...'):
                 final_results = run_spil_centric_allocation(
                     pipeline, uploaded_file_content, depo_option, 
                     spil_today_caps, tomorrow_capacities_input, 
-                    other_vendor_capacities_input, use_waiting_list, use_other_vendors, 
+                    other_vendor_capacities_input, use_waiting_list, use_other_vendors,
+                    use_container_filter, use_mhr_filter,
                     version="3.4"
                 )
             
             if not final_results.empty:
-                st.success("✅ Alokasi SPIL-Centric berhasil diselesaikan!")
-                
-                st.markdown("---")
-                st.subheader("Ringkasan Hasil Alokasi")
+                st.success("✅ Alokasi berhasil diselesaikan!")
                 
                 def get_final_mhr(row):
                     if pd.isna(row['ALOKASI']) or 'Tidak Terhandle' in row['ALOKASI']: return np.nan
                     if 'SPIL' in row['ALOKASI']: vendor = 'SPIL'
-                    else: vendor = row['ALOKASI'].replace('Dikerjakan ', '')
+                    else: vendor = row['ALOKASI'].replace('', '')
                     return row.get(f"MHR_{vendor}", np.nan)
-                final_results['MHR_FINAL'] = final_results.apply(get_final_mhr, axis=1)
+                final_results['MHR'] = final_results.apply(get_final_mhr, axis=1)
 
+                st.markdown("---")
+                st.subheader("Ringkasan Hasil Alokasi")
+                
                 vendor_stats = final_results.groupby('ALOKASI').agg(
                     Jumlah_Kontainer=('NO_EOR', 'nunique'),
-                    Total_Biaya=('HARGA_FINAL', 'sum'),
-                    Total_MHR=('MHR_FINAL', 'sum')
-                ).reset_index().rename(columns={'ALOKASI': 'STATUS'})
+                    Total_Prediksi_Biaya=('HARGA_FINAL', 'sum'),
+                    Total_MHR=('MHR', 'sum')
+            ).reset_index().rename(columns={'ALOKASI': 'STATUS', 'Total_Prediksi_Biaya': 'Total Biaya'})
                 
-                st.dataframe(vendor_stats.style.format({'Total_Biaya': 'Rp {:,.0f}', 'Total_MHR': '{:,.2f}'}), use_container_width=True)
+                st.dataframe(vendor_stats.style.format({
+                    'Total Biaya': 'Rp {:,.0f}', 
+                    'Total_MHR': '{:,.2f}'
+                }), use_container_width=True)
 
                 st.markdown("---")
                 st.subheader("Detail Hasil Alokasi")
                 
-                display_cols = ['NO_EOR', 'CONTAINER_TYPE', 'ALOKASI', 'HARGA_FINAL', 'MHR_FINAL', 'POTENSI_UNTUNG_SPIL', 'PREDIKSI_SPIL', 'HARGA_TERMURAH_LAIN']
-                display_df = final_results[display_cols].sort_values(by='POTENSI_UNTUNG_SPIL', ascending=False)
+                display_cols = ['NO_EOR', 'CONTAINER_TYPE', 'ALOKASI', 'HARGA_FINAL', 'MHR', 'Selisih_Prediksi_Biaya', 'PREDIKSI_SPIL', 'Prediksi_Biaya_Lain']
                 
-                st.dataframe(display_df.style.format({
-                    'HARGA_FINAL': 'Rp {:,.0f}',
-                    'MHR_FINAL': '{:,.2f}',
-                    'POTENSI_UNTUNG_SPIL': 'Rp {:,.0f}',
-                    'PREDIKSI_SPIL': 'Rp {:,.0f}',
-                    'HARGA_TERMURAH_LAIN': 'Rp {:,.0f}',
-                }, na_rep='-'), height=600)
+                display_cols_exist = [col for col in display_cols if col in final_results.columns]
+                display_df = final_results[display_cols_exist].sort_values(by='Selisih_Prediksi_Biaya', ascending=False)
+                
+                st.dataframe(
+                    display_df.rename(columns={
+                        'HARGA_FINAL': 'Prediksi Biaya',
+                        'PREDIKSI_SPIL': 'Prediksi Biaya SPIL',
+                        'Selisih_Prediksi_Biaya': 'Potensial Keuntungan'
+                    }).style.format({
+                        'Prediksi Biaya': 'Rp {:,.0f}',
+                        'MHR': '{:,.2f}',
+                        'Potensial Keuntungan': 'Rp {:,.0f}',
+                        'Prediksi Biaya SPIL': 'Rp {:,.0f}',
+                        'Prediksi_Biaya_Lain': 'Rp {:,.0f}',
+                    }, na_rep='-'),
+                    height=600,
+                    use_container_width=True
+                )
                 
                 csv_final = display_df.to_csv(index=False).encode('utf-8')
                 st.download_button(label="Download Hasil Alokasi", data=csv_final, file_name=f"hasil_alokasi_spil_{depo_option}.csv", mime="text/csv")
+                
+                with st.expander("Lihat Tabel Alokasi Lengkap", expanded=False):
+                    st.caption("Tabel ini menampilkan hasil alokasi final dan semua detail prediksi. Kolom prediksi biaya dan MHR yang terpilih diberi highlight kuning.")
 
-                with st.expander("📊 Lihat Tabel Prediksi Super Lengkap (dengan Highlight)", expanded=False):
-                    st.caption("Tabel ini menampilkan hasil alokasi final DAN semua detail prediksi. Kolom harga dan MHR yang terpilih diberi highlight kuning.")
-
-                    # === PERUBAHAN UTAMA ADA DI SINI ===
-
-                    # 1. Definisikan fungsi untuk highlighting
                     def highlight_final_choice(row):
-                        highlight_color = 'background-color: #fff8c4;' # Warna kuning muda
+                        highlight_color = 'background-color: #fff8c4;'
                         styles = [''] * len(row)
-                        
                         alokasi = row.get('ALOKASI')
                         if pd.isna(alokasi) or 'Tidak Terhandle' in alokasi:
                             return styles
-
-                        # Ekstrak nama vendor dari kolom alokasi
-                        vendor = alokasi.replace('Dikerjakan ', '').replace('Waiting List ', '').strip()
                         
+                        vendor = alokasi.replace('', '').replace('Waiting List ', '').strip()
                         pred_col = f'PREDIKSI_{vendor}'
                         mhr_col = f'MHR_{vendor}'
                         
                         try:
-                            # Dapatkan posisi index kolom yang akan di-highlight
-                            pred_idx = row.index.get_loc(pred_col)
-                            mhr_idx = row.index.get_loc(mhr_col)
-                            styles[pred_idx] = highlight_color
-                            styles[mhr_idx] = highlight_color
+                            if pred_col in row.index:
+                                pred_idx = row.index.get_loc(pred_col)
+                                styles[pred_idx] = highlight_color
+                            if mhr_col in row.index:
+                                mhr_idx = row.index.get_loc(mhr_col)
+                                styles[mhr_idx] = highlight_color
                         except KeyError:
-                            # Jika kolom tidak ditemukan, lewati saja
                             pass
-                            
                         return styles
 
-                    # 2. Tentukan kolom-kolom yang akan ditampilkan
-                    base_info_cols = ['NO_EOR', 'CONTAINER_TYPE', 'ALOKASI', 'HARGA_FINAL', 'MHR_FINAL', 'POTENSI_UNTUNG_SPIL']
+                    base_info_cols = ['NO_EOR', 'CONTAINER_TYPE', 'ALOKASI', 'HARGA_FINAL', 'MHR', 'Selisih_Prediksi_Biaya']
                     pred_cols_all = sorted([col for col in final_results.columns if col.startswith("PREDIKSI_") and not col.startswith("PREDIKSI/MHR_")])
-                    mhr_cols_all = sorted([col for col in final_results.columns if col.startswith("MHR_") and col != 'MHR_FINAL'])
+                    mhr_cols_all = sorted([col for col in final_results.columns if col.startswith("MHR_") and col != 'MHR'])
+                    
                     comprehensive_cols = base_info_cols + pred_cols_all + mhr_cols_all
+                    comprehensive_cols_exist = [col for col in comprehensive_cols if col in final_results.columns]
                     
-                    detail_df = final_results[comprehensive_cols].sort_values(by='POTENSI_UNTUNG_SPIL', ascending=False).copy()
+                    detail_df = final_results[comprehensive_cols_exist].sort_values(by='Selisih_Prediksi_Biaya', ascending=False).copy()
                     
-                    # 3. Siapkan format styling angka
                     format_dict_full = {
-                        'HARGA_FINAL': 'Rp {:,.0f}',
-                        'MHR_FINAL': '{:,.2f}',
-                        'POTENSI_UNTUNG_SPIL': 'Rp {:,.0f}'
+                        'Prediksi Biaya Final': 'Rp {:,.0f}',
+                        'MHR': '{:,.2f}',
+                        'Selisih_Prediksi_Biaya': 'Rp {:,.0f}'
                     }
                     for col in pred_cols_all: format_dict_full[col] = 'Rp {:,.0f}'
                     for col in mhr_cols_all: format_dict_full[col] = '{:,.2f}'
                     
-                    # 4. Tampilkan DataFrame dengan menerapkan highlight dan format
-                    st.dataframe(detail_df.style.apply(highlight_final_choice, axis=1).format(format_dict_full, na_rep='-'), height=600, use_container_width=True)
+                    st.dataframe(detail_df.rename(columns={'HARGA_FINAL': 'Prediksi Biaya Final'}).style.apply(highlight_final_choice, axis=1).format(format_dict_full, na_rep='-'), height=600, use_container_width=True)
                     
-                    # 5. Siapkan file CSV untuk di-download
                     csv_pred_detail = detail_df.to_csv(index=False).encode('utf-8')
                     st.download_button(
-                        label="Download Prediksi Super Lengkap",
+                        label="Download Tabel Lengkap",
                         data=csv_pred_detail,
                         file_name=f"prediksi_super_lengkap_{depo_option}.csv",
-                        mime="text/csv"
+                        mime="text/csv",
+                        key="download_super_lengkap"
                     )
 
         except Exception as e:
@@ -548,4 +611,4 @@ with tab_bulk:
     elif run_bulk_button:
         st.warning("Mohon unggah file CSV terlebih dahulu.")
     else:
-        st.info("Silakan unggah file CSV dan klik 'Jalankan Alokasi SPIL-Centric' untuk memulai.")
+        st.info("Silakan unggah file CSV dan klik 'Cek Alokasi' untuk memulai.")
