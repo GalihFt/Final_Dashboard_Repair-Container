@@ -536,13 +536,18 @@ with tab_bulk:
                     display_df.rename(columns={
                         'HARGA_FINAL': 'Prediksi Biaya',
                         'PREDIKSI_SPIL': 'Prediksi Biaya SPIL',
-                        'Selisih_Prediksi_Biaya': 'Potensial Keuntungan'
+                        'Selisih_Prediksi_Biaya': 'Potensial Keuntungan',
+                        'CONTAINER_TYPE': 'Tipe Kontainer',
+                        'ALOKASI': 'Alokasi',
+                        'NO_EOR': 'No EOR',
+                        'Prediksi_Biaya_Lain': 'Prediksi Biaya Lain',
+                        'MHR': 'Estimasi MHR'
                     }).style.format({
                         'Prediksi Biaya': 'Rp {:,.0f}',
-                        'MHR': '{:,.2f}',
+                        'Estimasi MHR': '{:,.2f}',
                         'Potensial Keuntungan': 'Rp {:,.0f}',
                         'Prediksi Biaya SPIL': 'Rp {:,.0f}',
-                        'Prediksi_Biaya_Lain': 'Rp {:,.0f}',
+                        'Prediksi Biaya Lain': 'Rp {:,.0f}',
                     }, na_rep='-'),
                     height=600,
                     use_container_width=True
