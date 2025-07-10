@@ -517,11 +517,14 @@ with tab_bulk:
                     Jumlah_Kontainer=('NO_EOR', 'nunique'),
                     Total_Prediksi_Biaya=('HARGA_FINAL', 'sum'),
                     Total_MHR=('MHR', 'sum')
-            ).reset_index().rename(columns={'ALOKASI': 'STATUS', 'Total_Prediksi_Biaya': 'Total Biaya'})
+            ).reset_index().rename(columns={'ALOKASI': 'STATUS',
+                                            'Total_Prediksi_Biaya': 'Total Biaya',
+                                            'Jumlah_Kontainer': 'Jumlah Kontainer',
+                                            'Total_MHR': 'Total MHR'})
                 
                 st.dataframe(vendor_stats.style.format({
                     'Total Biaya': 'Rp {:,.0f}', 
-                    'Total_MHR': '{:,.2f}'
+                    'Total MHR': '{:,.2f}'
                 }), use_container_width=True)
 
                 st.markdown("---")
@@ -582,8 +585,8 @@ with tab_bulk:
                         return styles
 
                     base_info_cols = ['NO_EOR', 'CONTAINER_TYPE', 'ALOKASI', 'HARGA_FINAL', 'MHR', 'Selisih_Prediksi_Biaya']
-                    pred_cols_all = sorted([col for col in final_results.columns if col.startswith("PREDIKSI_") and not col.startswith("PREDIKSI/MHR_")])
-                    mhr_cols_all = sorted([col for col in final_results.columns if col.startswith("MHR_") and col != 'MHR'])
+                    pred_cols_all = sorted([col for col in final_results.columns if col.startswith("PREDIKSI ") and not col.startswith("PREDIKSI/MHR_")])
+                    mhr_cols_all = sorted([col for col in final_results.columns if col.startswith("MHR ") and col != 'MHR'])
                     
                     comprehensive_cols = base_info_cols + pred_cols_all + mhr_cols_all
                     comprehensive_cols_exist = [col for col in comprehensive_cols if col in final_results.columns]
@@ -592,13 +595,17 @@ with tab_bulk:
                     
                     format_dict_full = {
                         'Prediksi Biaya Final': 'Rp {:,.0f}',
-                        'MHR': '{:,.2f}',
-                        'Selisih_Prediksi_Biaya': 'Rp {:,.0f}'
+                        'Estimasi MHR': '{:,.2f}',
+                        'Potensial Keuntungan': 'Rp {:,.0f}'
                     }
                     for col in pred_cols_all: format_dict_full[col] = 'Rp {:,.0f}'
                     for col in mhr_cols_all: format_dict_full[col] = '{:,.2f}'
                     
-                    st.dataframe(detail_df.rename(columns={'HARGA_FINAL': 'Prediksi Biaya Final'}).style.apply(highlight_final_choice, axis=1).format(format_dict_full, na_rep='-'), height=600, use_container_width=True)
+                    st.dataframe(detail_df.rename(columns={'HARGA_FINAL': 'Prediksi Biaya Final',
+                                                           'NO_EOR': 'No EOR',
+                                                           'CONTAINER_TYPE':'Tipe Kontainer',
+                                                           'Selisih_Prediksi_Biaya': 'Potensial Keuntungan',
+                                                           'MHR':'Estimasi MHR'}).style.apply(highlight_final_choice, axis=1).format(format_dict_full, na_rep='-'), height=600, use_container_width=True)
                     
                     csv_pred_detail = detail_df.to_csv(index=False).encode('utf-8')
                     st.download_button(
